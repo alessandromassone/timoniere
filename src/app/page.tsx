@@ -1,9 +1,8 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, Dispatch, FormEvent, RefObject, SetStateAction } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { useSearchParams } from "next/navigation";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import type { CoverPageKind, EditorialStatus, Issue, MagazinePage, PageDraft, PageKind } from "@/lib/types";
 
@@ -14,6 +13,14 @@ const DEFAULT_STATUS_COLORS = [
   "#51d6d1",
   "#48a858",
   "#55aeb8",
+];
+
+const COLOR_SWATCH_ROWS = [
+  ["#1b1b1b", "#4a4a4a", "#737373", "#9b9b9b", "#bfbfbf", "#e1e1e1", "#ffffff"],
+  ["#7d1216", "#9b5618", "#868614", "#4f8a1c", "#1f7a34", "#1d7f67", "#155c8f", "#1d318f", "#4d218f", "#7f1a8a", "#9a1a66"],
+  ["#e13a2f", "#f18a22", "#e6ea2b", "#7ed33b", "#31c24a", "#35cdbb", "#2b8ae8", "#243edb", "#7a32d4", "#c033bc", "#e23583"],
+  ["#f17f79", "#f0bd62", "#edf17d", "#b7ee78", "#88ec8f", "#87eee0", "#7fc4f2", "#7d89f1", "#b885eb", "#e087dc", "#ef8abb"],
+  ["#c73536", "#cda842", "#c7cd43", "#7fc440", "#4dbd55", "#4bb6a8", "#4e9ac8", "#4550ba", "#7a48bf", "#b54eb8", "#c64f8a"],
 ];
 
 const EMPTY_PAGE_DRAFT: PageDraft = {
@@ -125,20 +132,14 @@ function slugify(value: string) {
 }
 
 export default function Home() {
-  return (
-    <Suspense fallback={<main className="loading">Caricamento timone...</main>}>
-      <TimoniereApp />
-    </Suspense>
-  );
+  return <TimoniereApp />;
 }
 
 function TimoniereApp() {
-  const searchParams = useSearchParams();
-  const issueFromUrl = searchParams.get("issue");
   const [issues, setIssues] = useState<Issue[]>([]);
   const [statuses, setStatuses] = useState<EditorialStatus[]>([]);
   const [pages, setPages] = useState<MagazinePage[]>([]);
-  const [selectedIssueId, setSelectedIssueId] = useState<string | null>(issueFromUrl);
+  const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [draggedPageId, setDraggedPageId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -149,6 +150,7 @@ function TimoniereApp() {
   const [initialPageCount, setInitialPageCount] = useState(16);
   const [newStatusName, setNewStatusName] = useState("");
   const [newStatusColor, setNewStatusColor] = useState(DEFAULT_STATUS_COLORS[0]);
+  const [openColorPickerId, setOpenColorPickerId] = useState<string | null>(null);
   const [pageDraft, setPageDraft] = useState<PageDraft>(EMPTY_PAGE_DRAFT);
   const [inlineEditorPageId, setInlineEditorPageId] = useState<string | null>(null);
   const [inlineEditorPlacement, setInlineEditorPlacement] = useState<InlineEditorPlacement | null>(null);
@@ -181,6 +183,11 @@ function TimoniereApp() {
   useEffect(() => {
     selectedPageIdRef.current = selectedPageId;
   }, [selectedPageId]);
+
+  useEffect(() => {
+    const issueId = new URLSearchParams(window.location.search).get("issue");
+    if (issueId) setSelectedIssueId(issueId);
+  }, []);
 
   useEffect(() => {
     if (!inlineEditorPageId || selectedPage?.id !== inlineEditorPageId) return;
@@ -600,6 +607,14 @@ function TimoniereApp() {
     );
   }
 
+  async function selectStatusColor(status: EditorialStatus, color: string) {
+    setStatuses((current) =>
+      current.map((item) => (item.id === status.id ? { ...item, color } : item)),
+    );
+    setOpenColorPickerId(null);
+    await updateStatus(status, { color });
+  }
+
   async function deleteStatus(status: EditorialStatus) {
     if (!supabase) return;
 
@@ -979,11 +994,15 @@ function TimoniereApp() {
               onChange={(event) => setNewStatusName(event.target.value)}
               placeholder="Nuovo status"
             />
-            <input
-              aria-label="Colore status"
-              type="color"
+            <SwatchColorPicker
+              id="new-status"
+              isOpen={openColorPickerId === "new-status"}
+              onOpenChange={(isOpen) => setOpenColorPickerId(isOpen ? "new-status" : null)}
+              onSelect={(color) => {
+                setNewStatusColor(color);
+                setOpenColorPickerId(null);
+              }}
               value={newStatusColor}
-              onChange={(event) => setNewStatusColor(event.target.value)}
             />
             <button type="submit">Aggiungi</button>
           </form>
@@ -996,18 +1015,19 @@ function TimoniereApp() {
                   onChange={(event) => setStatuses((current) => current.map((item) => (item.id === status.id ? { ...item, name: event.target.value } : item)))}
                   onBlur={(event) => void updateStatus(status, { name: event.target.value })}
                 />
-                <input
-                  aria-label={`Colore ${status.name}`}
-                  type="color"
+                <SwatchColorPicker
+                  id={status.id}
+                  isOpen={openColorPickerId === status.id}
+                  onOpenChange={(isOpen) => setOpenColorPickerId(isOpen ? status.id : null)}
+                  onSelect={(color) => void selectStatusColor(status, color)}
                   value={status.color}
-                  onChange={(event) => {
-                    setStatuses((current) => current.map((item) => (item.id === status.id ? { ...item, color: event.target.value } : item)));
-                    void updateStatus(status, { color: event.target.value });
-                  }}
                 />
-                <button aria-label={`Elimina ${status.name}`} onClick={() => void deleteStatus(status)} type="button">
-                  x
-                </button>
+                <button
+                  aria-label={`Elimina ${status.name}`}
+                  className="icon-button close-button status-delete"
+                  onClick={() => void deleteStatus(status)}
+                  type="button"
+                />
               </div>
             ))}
           </div>
@@ -1159,9 +1179,7 @@ function InlinePageEditor({
     >
       <div className="inline-editor-head">
         <strong>{label}</strong>
-        <button aria-label="Chiudi editor pagina" onClick={onClose} type="button">
-          x
-        </button>
+        <button className="icon-button close-button" aria-label="Chiudi editor pagina" onClick={onClose} type="button" />
       </div>
       <label>
         Nome articolo
@@ -1243,5 +1261,54 @@ function InlinePageEditor({
         </button>
       </div>
     </form>
+  );
+}
+
+type SwatchColorPickerProps = {
+  id: string;
+  isOpen: boolean;
+  onOpenChange: (isOpen: boolean) => void;
+  onSelect: (color: string) => void;
+  value: string;
+};
+
+function SwatchColorPicker({ id, isOpen, onOpenChange, onSelect, value }: SwatchColorPickerProps) {
+  return (
+    <div className="swatch-picker">
+      <button
+        aria-expanded={isOpen}
+        aria-label={`Scegli colore ${id}`}
+        className="swatch-picker-trigger"
+        onClick={() => onOpenChange(!isOpen)}
+        type="button"
+      >
+        <span style={{ backgroundColor: value }} />
+      </button>
+      {isOpen ? (
+        <div className="swatch-popover" role="dialog" aria-label="Scegli colore tag">
+          <div className="swatch-popover-head">
+            <strong>Colori</strong>
+            <button className="icon-button close-button" aria-label="Chiudi colori" onClick={() => onOpenChange(false)} type="button" />
+          </div>
+          <div className="swatch-rows">
+            {COLOR_SWATCH_ROWS.map((row, rowIndex) => (
+              <div className="swatch-row" key={rowIndex}>
+                {row.map((color) => (
+                  <button
+                    aria-label={`Colore ${color}`}
+                    aria-pressed={value.toLowerCase() === color.toLowerCase()}
+                    className="swatch-color"
+                    key={color}
+                    onClick={() => onSelect(color)}
+                    style={{ "--swatch-color": color } as CSSProperties & { "--swatch-color": string }}
+                    type="button"
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
