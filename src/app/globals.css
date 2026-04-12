@@ -46,7 +46,7 @@ textarea {
 
 button {
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: 999px;
   cursor: pointer;
   transition:
     background-color 140ms ease,
@@ -227,6 +227,7 @@ h3 {
 .issue-item {
   background: rgba(255, 255, 255, 0.82);
   border: 1px solid var(--line);
+  border-radius: 6px;
   color: var(--ink);
   display: grid;
   gap: 5px;
@@ -435,8 +436,19 @@ h3 {
   height: 156px;
 }
 
-.spread.single.opening-spread .page-tile {
+.spread.single.opening-spread .page-slot {
   grid-column: 2;
+}
+
+.page-slot {
+  height: 156px;
+  position: relative;
+  width: 132px;
+}
+
+.page-slot .page-tile {
+  height: 100%;
+  width: 100%;
 }
 
 .page-tile {
@@ -626,6 +638,82 @@ h3 {
     transform 140ms ease;
   visibility: hidden;
   white-space: normal;
+}
+
+.inline-page-editor {
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(25, 27, 26, 0.18);
+  border-radius: 12px;
+  box-shadow: 0 22px 52px rgba(31, 36, 34, 0.24);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  position: fixed;
+  top: 0;
+  width: 308px;
+  z-index: 100;
+}
+
+.inline-page-editor[data-direction="left"]::before {
+  border-color: transparent transparent transparent rgba(255, 255, 255, 0.96);
+  border-width: 9px 0 9px 10px;
+  left: 100%;
+  right: auto;
+}
+
+.inline-page-editor[data-direction="right"]::before {
+  border-color: transparent rgba(255, 255, 255, 0.96) transparent transparent;
+  border-width: 9px 10px 9px 0;
+  left: auto;
+  right: 100%;
+}
+
+.inline-page-editor::before {
+  border-style: solid;
+  content: "";
+  position: absolute;
+  top: var(--inline-arrow-top, 20px);
+}
+
+.inline-editor-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.inline-editor-head strong {
+  font-size: 13px;
+}
+
+.inline-editor-head button,
+.inline-editor-actions button {
+  min-height: 34px;
+  padding: 7px 12px;
+}
+
+.inline-editor-head button {
+  background: var(--paper);
+  color: var(--muted);
+  height: 34px;
+  padding: 0;
+  width: 34px;
+}
+
+.inline-editor-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.inline-editor-actions button:first-child {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.inline-editor-actions button:last-child {
+  background: var(--paper);
+  color: var(--ink);
 }
 
 .warning-tooltip::after {
