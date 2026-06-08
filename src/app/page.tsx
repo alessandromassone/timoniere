@@ -4,6 +4,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import type { CSSProperties, Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
+import type { WheelEvent as ReactWheelEvent } from "react";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import type { Article, CoverPageKind, EditorialStatus, Issue, MagazinePage, PageDraft, PageKind } from "@/lib/types";
 
@@ -1698,6 +1699,26 @@ function TimoniereApp() {
     setKanbanComposerCharacterCount("");
   }
 
+  function handleKanbanColumnWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    const horizontalDelta = Math.abs(event.deltaX) > 0 ? event.deltaX : event.shiftKey ? event.deltaY : 0;
+    if (horizontalDelta === 0) return;
+
+    const kanbanColumns = event.currentTarget.closest<HTMLElement>(".kanban-columns");
+    if (!kanbanColumns) return;
+
+    event.preventDefault();
+    kanbanColumns.scrollBy({ left: horizontalDelta });
+  }
+
+  function syncKanbanColumnScrollChrome(element: HTMLDivElement | null) {
+    if (!element) return;
+
+    const column = element.closest<HTMLElement>(".kanban-column");
+    if (!column) return;
+
+    column.dataset.topFade = element.scrollTop > 2 ? "visible" : "hidden";
+  }
+
   async function saveSelectedArticle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedArticle) return;
@@ -2517,7 +2538,12 @@ function TimoniereApp() {
                           </div>
                         </header>
 
-                        <div className="kanban-column-body">
+                        <div
+                          className="kanban-column-body"
+                          onScroll={(event) => syncKanbanColumnScrollChrome(event.currentTarget)}
+                          onWheel={handleKanbanColumnWheel}
+                          ref={syncKanbanColumnScrollChrome}
+                        >
                           {columnArticles.map((article) => {
                             const linkedPages = articlePages[article.id] ?? [];
                             const linkedLabels = linkedPages.map((page) => pageLabel(page, contentPages));
