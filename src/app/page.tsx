@@ -2414,90 +2414,92 @@ function TimoniereApp() {
               )}
             </section>
 
-            <section className="status-dashboard" aria-label="Stato lavorazione">
-              <div className="status-dashboard-head">
-                <div>
-                  <span>Stato lavorazione</span>
-                  <strong>
-                    {inProgressPageCount} / {contentPages.length} pagine in lavorazione
-                  </strong>
-                  <small>{untaggedPageCount} pagine da impostare</small>
+            {workspaceView === "timone" ? (
+              <section className="status-dashboard" aria-label="Stato lavorazione">
+                <div className="status-dashboard-head">
+                  <div>
+                    <span>Stato lavorazione</span>
+                    <strong>
+                      {inProgressPageCount} / {contentPages.length} pagine in lavorazione
+                    </strong>
+                    <small>{untaggedPageCount} pagine da impostare</small>
+                  </div>
+                  <div>
+                    <span>Warning</span>
+                    <strong>{warningPageCount}</strong>
+                    <small>{warningPageCount === 1 ? "pagina segnalata" : "pagine segnalate"}</small>
+                  </div>
                 </div>
-                <div>
-                  <span>Warning</span>
-                  <strong>{warningPageCount}</strong>
-                  <small>{warningPageCount === 1 ? "pagina segnalata" : "pagine segnalate"}</small>
-                </div>
-              </div>
 
-              <div className="status-progress" aria-label="Distribuzione status">
-                {statusOverviewItems.map((item) =>
-                  item.count > 0 ? (
-                    <span
+                <div className="status-progress" aria-label="Distribuzione status">
+                  {statusOverviewItems.map((item) =>
+                    item.count > 0 ? (
+                      <span
+                        key={item.id}
+                        style={
+                          {
+                            "--status-color": item.color,
+                            width: `${Math.max(2, percentValue(item.count, contentPages.length))}%`,
+                          } as CSSProperties & { "--status-color": string }
+                        }
+                        title={`${item.name}: ${item.count} pagine`}
+                      />
+                    ) : null,
+                  )}
+                </div>
+
+                <div className="status-cards">
+                  {statusOverviewItems.map((item) => (
+                    <article
+                      className="status-card"
                       key={item.id}
-                      style={
-                        {
-                          "--status-color": item.color,
-                          width: `${Math.max(2, percentValue(item.count, contentPages.length))}%`,
-                        } as CSSProperties & { "--status-color": string }
-                      }
-                      title={`${item.name}: ${item.count} pagine`}
-                    />
-                  ) : null,
-                )}
-              </div>
-
-              <div className="status-cards">
-                {statusOverviewItems.map((item) => (
-                  <article
-                    className="status-card"
-                    key={item.id}
-                    style={{ "--status-color": item.color } as CSSProperties & { "--status-color": string }}
-                    title={`${item.name}: ${item.count} pagine, ${percentValue(item.count, contentPages.length)}%`}
-                  >
-                    <div className="status-card-main">
-                      <strong>{item.count}</strong>
-                      <span>{item.name}</span>
-                    </div>
-                    <div className="status-card-meter" aria-label={`${percentValue(item.count, contentPages.length)}%`}>
-                      <i
-                        style={{ width: `${percentValue(item.count, contentPages.length)}%` }}
-                        aria-hidden="true"
-                      />
-                    </div>
-                  </article>
-                ))}
-              </div>
-
-              <div className="heatmap-block">
-                <div className="heatmap-head">
-                  <span>Mappa pagine</span>
+                      style={{ "--status-color": item.color } as CSSProperties & { "--status-color": string }}
+                      title={`${item.name}: ${item.count} pagine, ${percentValue(item.count, contentPages.length)}%`}
+                    >
+                      <div className="status-card-main">
+                        <strong>{item.count}</strong>
+                        <span>{item.name}</span>
+                      </div>
+                      <div className="status-card-meter" aria-label={`${percentValue(item.count, contentPages.length)}%`}>
+                        <i
+                          style={{ width: `${percentValue(item.count, contentPages.length)}%` }}
+                          aria-hidden="true"
+                        />
+                      </div>
+                    </article>
+                  ))}
                 </div>
-                <div className="status-heatmap" aria-label="Heatmap pagine">
-                  {contentPages.map((page) => {
-                    const status = getPageStatus(page);
-                    const label = pageLabel(page, contentPages);
-                    return (
-                      <button
-                        aria-label={`Pagina ${label}: ${status?.name ?? "da impostare"}`}
-                        className={[
-                          "heatmap-cell",
-                          selectedPageId === page.id ? "active" : "",
-                          page.warning_enabled ? "has-warning" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ")}
-                        key={page.id}
-                        onClick={(event) => handlePageSelection(page, event)}
-                        style={{ "--status-color": status?.color ?? UNTAGGED_STATUS_COLOR } as CSSProperties & { "--status-color": string }}
-                        title={`Pagina ${label}: ${status?.name ?? "da impostare"}${page.warning_enabled ? " · warning" : ""}`}
-                        type="button"
-                      />
-                    );
-                  })}
+
+                <div className="heatmap-block">
+                  <div className="heatmap-head">
+                    <span>Mappa pagine</span>
+                  </div>
+                  <div className="status-heatmap" aria-label="Heatmap pagine">
+                    {contentPages.map((page) => {
+                      const status = getPageStatus(page);
+                      const label = pageLabel(page, contentPages);
+                      return (
+                        <button
+                          aria-label={`Pagina ${label}: ${status?.name ?? "da impostare"}`}
+                          className={[
+                            "heatmap-cell",
+                            selectedPageId === page.id ? "active" : "",
+                            page.warning_enabled ? "has-warning" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                          key={page.id}
+                          onClick={(event) => handlePageSelection(page, event)}
+                          style={{ "--status-color": status?.color ?? UNTAGGED_STATUS_COLOR } as CSSProperties & { "--status-color": string }}
+                          title={`Pagina ${label}: ${status?.name ?? "da impostare"}${page.warning_enabled ? " · warning" : ""}`}
+                          type="button"
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            </section>
+              </section>
+            ) : null}
 
             {workspaceView === "timone" ? (
               <>
