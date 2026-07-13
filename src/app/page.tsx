@@ -308,6 +308,7 @@ function TimoniereApp() {
 
   const selectedIssue = issues.find((issue) => issue.id === selectedIssueId) ?? null;
   const selectedPage = pages.find((page) => page.id === selectedPageId) ?? null;
+  const inlineEditingPage = inlineEditorPageId ? pages.find((page) => page.id === inlineEditorPageId) ?? null : null;
   const selectedArticle = selectedArticleId ? articles.find((article) => article.id === selectedArticleId) ?? null : null;
   const articleTitles = useMemo(
     () =>
@@ -418,12 +419,61 @@ function TimoniereApp() {
       ),
     [articles, kanbanColumns],
   );
+  const selectedPageHasSharedArticleFields =
+    selectedPage?.kind === "content" &&
+    !!selectedPage.article_id &&
+    (articlePages[selectedPage.article_id]?.length ?? 0) > 1;
+  const inlineEditingPageHasSharedArticleFields =
+    inlineEditingPage?.kind === "content" &&
+    !!inlineEditingPage.article_id &&
+    (articlePages[inlineEditingPage.article_id]?.length ?? 0) > 1;
 
   const closeIssueInfoModal = useCallback(() => {
     setIsIssueInfoModalOpen(false);
     setIssueDraftTitle(selectedIssue?.title ?? "");
     setIssueDraftDescription(selectedIssue?.description ?? "");
   }, [selectedIssue]);
+
+  const articleFieldsForPages = useCallback(
+    (article: Pick<Article, "assignee" | "character_count" | "status_id" | "title">) => ({
+      assignee: article.assignee,
+      character_count: article.character_count,
+      status_id: article.status_id,
+      title: article.title,
+    }),
+    [],
+  );
+
+  const syncArticleFieldsToPagesInDatabase = useCallback(
+    async (article: Pick<Article, "id" | "assignee" | "character_count" | "status_id" | "title">, excludePageId?: string) => {
+      if (!supabase) return "Supabase non configurato.";
+
+      let query = supabase.from("pages").update(articleFieldsForPages(article)).eq("article_id", article.id);
+      if (excludePageId) {
+        query = query.neq("id", excludePageId);
+      }
+
+      const { error } = await query;
+      return error?.message ?? null;
+    },
+    [articleFieldsForPages],
+  );
+
+  const applyArticleFieldsToPagesState = useCallback(
+    (article: Pick<Article, "id" | "assignee" | "character_count" | "status_id" | "title">, excludePageId?: string) => {
+      const nextFields = articleFieldsForPages(article);
+      setPages((current) =>
+        sortPages(
+          current.map((page) =>
+            page.article_id === article.id && page.id !== excludePageId
+              ? { ...page, ...nextFields }
+              : page,
+          ),
+        ),
+      );
+    },
+    [articleFieldsForPages],
+  );
 
   const persistPageDraft = useCallback(
     async (targetPage: MagazinePage, draft: PageDraft, options: { closeInline?: boolean } = {}) => {
@@ -465,7 +515,21 @@ function TimoniereApp() {
 
       const trimmedTitle = draft.title.trim();
       const currentArticle = targetPage.article_id ? articles.find((article) => article.id === targetPage.article_id) ?? null : null;
+      const linkedPageCount = currentArticle ? pages.filter((page) => page.article_id === currentArticle.id).length : 0;
       let resolvedArticle: Article | null = null;
+
+      if (
+        currentArticle &&
+        linkedPageCount > 1 &&
+        (trimmedTitle !== currentArticle.title ||
+          draft.assignee.trim() !== currentArticle.assignee ||
+          draft.character_count !== currentArticle.character_count ||
+          (draft.status_id || null) !== currentArticle.status_id)
+      ) {
+        setNotice("Questo articolo e collegato a piu pagine. Modificalo dalla Kanban per evitare aggiornamenti involontari.");
+        setIsSaving(false);
+        return;
+      }
 
       if (trimmedTitle) {
         const matchKey = articleMatchKey(trimmedTitle);
@@ -478,6 +542,12 @@ function TimoniereApp() {
           status_id: draft.status_id || null,
           title: trimmedTitle,
         };
+
+        if (matchedArticle && matchedArticle.id !== currentArticle?.id) {
+          setNotice("Esiste gia un altro articolo con questo titolo. Aprilo dalla Kanban per modificarlo.");
+          setIsSaving(false);
+          return;
+        }
 
         if (currentArticle && (!matchedArticle || matchedArticle.id === currentArticle.id)) {
           const { data, error } = await supabase
@@ -536,16 +606,12 @@ function TimoniereApp() {
       }
 
       if (resolvedArticle) {
-        await supabase
-          .from("pages")
-          .update({
-            title: resolvedArticle.title,
-            assignee: resolvedArticle.assignee,
-            character_count: resolvedArticle.character_count,
-            status_id: resolvedArticle.status_id,
-          })
-          .eq("article_id", resolvedArticle.id)
-          .neq("id", targetPage.id);
+        const syncLinkedPagesError = await syncArticleFieldsToPagesInDatabase(resolvedArticle, targetPage.id);
+        if (syncLinkedPagesError) {
+          setNotice(syncLinkedPagesError);
+          setIsSaving(false);
+          return;
+        }
 
         setArticles((current) => {
           const nextArticles = current.some((article) => article.id === resolvedArticle?.id)
@@ -563,39 +629,42 @@ function TimoniereApp() {
               return data as MagazinePage;
             }
 
-            if (resolvedArticle && page.article_id === resolvedArticle.id) {
-              return {
-                ...page,
-                assignee: resolvedArticle.assignee,
-                character_count: resolvedArticle.character_count,
-                status_id: resolvedArticle.status_id,
-                title: resolvedArticle.title,
-              };
-            }
-
             return page;
           }),
         ),
       );
+      if (resolvedArticle) {
+        applyArticleFieldsToPagesState(resolvedArticle, targetPage.id);
+      }
       setNotice("Pagina salvata.");
 
       setIsSaving(false);
     },
-    [articles],
+    [applyArticleFieldsToPagesState, articles, pages, syncArticleFieldsToPagesInDatabase],
   );
 
-  const saveInlineEditorAndClose = useCallback(async () => {
-    if (!inlineEditorPageId) return;
-
-    const inlinePage = pages.find((page) => page.id === inlineEditorPageId);
-    if (!inlinePage) {
-      setInlineEditorPageId(null);
-      setInlineEditorPlacement(null);
-      return;
+  const closeInlinePageEditor = useCallback(() => {
+    if (inlineEditingPage) {
+      setPageDraft(draftFromPage(inlineEditingPage, getPageArticle(inlineEditingPage)));
+    } else if (selectedPage) {
+      setPageDraft(draftFromPage(selectedPage, getPageArticle(selectedPage)));
+    } else {
+      setPageDraft(EMPTY_PAGE_DRAFT);
     }
 
-    await persistPageDraft(inlinePage, pageDraft, { closeInline: true });
-  }, [inlineEditorPageId, pageDraft, pages, persistPageDraft]);
+    setInlineEditorPageId(null);
+    setInlineEditorPlacement(null);
+  }, [getPageArticle, inlineEditingPage, selectedPage]);
+
+  const saveInlinePage = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!inlineEditingPage) return;
+
+      await persistPageDraft(inlineEditingPage, pageDraft, { closeInline: true });
+    },
+    [inlineEditingPage, pageDraft, persistPageDraft],
+  );
 
   const persistArticleDraft = useCallback(
     async (
@@ -646,34 +715,17 @@ function TimoniereApp() {
         }
 
         const updatedArticle = data as Article;
-        await supabase
-          .from("pages")
-          .update({
-            assignee: updatedArticle.assignee,
-            character_count: updatedArticle.character_count,
-            status_id: updatedArticle.status_id,
-            title: updatedArticle.title,
-          })
-          .eq("article_id", updatedArticle.id);
+        const syncArticlePagesError = await syncArticleFieldsToPagesInDatabase(updatedArticle);
+        if (syncArticlePagesError) {
+          setNotice(syncArticlePagesError);
+          setIsSaving(false);
+          return;
+        }
 
         setArticles((current) =>
           sortArticles(current.map((article) => (article.id === updatedArticle.id ? updatedArticle : article))),
         );
-        setPages((current) =>
-          sortPages(
-            current.map((page) =>
-              page.article_id === updatedArticle.id
-                ? {
-                    ...page,
-                    assignee: updatedArticle.assignee,
-                    character_count: updatedArticle.character_count,
-                    status_id: updatedArticle.status_id,
-                    title: updatedArticle.title,
-                  }
-                : page,
-            ),
-          ),
-        );
+        applyArticleFieldsToPagesState(updatedArticle);
         setSelectedArticleId(updatedArticle.id);
         setSelectedArticleIds([updatedArticle.id]);
         setSelectionAnchorArticleId(updatedArticle.id);
@@ -707,7 +759,7 @@ function TimoniereApp() {
 
       setIsSaving(false);
     },
-    [articles, selectedIssueId],
+    [applyArticleFieldsToPagesState, articles, selectedIssueId, syncArticleFieldsToPagesInDatabase],
   );
 
   const closeInlineArticleEditor = useCallback(() => {
@@ -824,14 +876,14 @@ function TimoniereApp() {
       if (!(target instanceof Node)) return;
       if (inlineEditorRef.current?.contains(target)) return;
 
-      void saveInlineEditorAndClose();
+      closeInlinePageEditor();
     }
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
 
       event.preventDefault();
-      void saveInlineEditorAndClose();
+      closeInlinePageEditor();
     }
 
     document.addEventListener("pointerdown", handlePointerDown, true);
@@ -841,7 +893,7 @@ function TimoniereApp() {
       document.removeEventListener("pointerdown", handlePointerDown, true);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [inlineEditorPageId, saveInlineEditorAndClose]);
+  }, [closeInlinePageEditor, inlineEditorPageId]);
 
   useEffect(() => {
     if (!inlineArticleEditor) return;
@@ -979,6 +1031,11 @@ function TimoniereApp() {
       setSelectedPageId(nextPages[0]?.id ?? null);
     }
   }, []);
+
+  const reloadIssueContent = useCallback(async () => {
+    if (!selectedIssueId) return;
+    await Promise.all([loadPages(selectedIssueId), loadArticles(selectedIssueId)]);
+  }, [loadArticles, loadPages, selectedIssueId]);
 
   const loadInitialData = useCallback(async () => {
     setIsLoading(true);
@@ -1317,6 +1374,7 @@ function TimoniereApp() {
 
     if (failedUpdate?.error) {
       setNotice(failedUpdate.error.message);
+      await loadPages(selectedIssueId);
     }
   }
 
@@ -1455,8 +1513,18 @@ function TimoniereApp() {
       const matchKey = articleMatchKey(trimmedTitle);
       const matchedArticle =
         articles.find((article) => article.issue_id === selectedIssueId && article.match_key === matchKey) ?? null;
+      const hasPagesLinkedToDifferentArticle = selectedContentPages.some(
+        (page) => page.article_id && page.article_id !== matchedArticle?.id,
+      );
+      const hasUnlinkedPages = selectedContentPages.some((page) => !page.article_id);
 
       if (matchedArticle) {
+        if (hasPagesLinkedToDifferentArticle || hasUnlinkedPages) {
+          setNotice("Esiste gia un altro articolo con questo titolo. Aprilo dalla Kanban per modificarlo.");
+          setIsSaving(false);
+          return;
+        }
+
         if (Object.keys(articlePatch).length > 0) {
           const { data, error } = await supabase
             .from("articles")
@@ -1515,6 +1583,17 @@ function TimoniereApp() {
         ).values(),
       );
 
+      const selectedPageIdsSet = new Set(pageIds);
+      const hasPartiallySelectedArticle = linkedArticles.some((article) =>
+        pages.some((page) => page.article_id === article.id && !selectedPageIdsSet.has(page.id)),
+      );
+
+      if (hasPartiallySelectedArticle && (trimmedTitle || Object.keys(articlePatch).length > 0)) {
+        setNotice("La selezione include articoli collegati anche ad altre pagine. Modificali dalla Kanban.");
+        setIsSaving(false);
+        return;
+      }
+
       if (linkedArticles.length > 0 && Object.keys(articlePatch).length > 0) {
         for (const linkedArticle of linkedArticles) {
           const { error } = await supabase
@@ -1528,10 +1607,15 @@ function TimoniereApp() {
             return;
           }
 
-          await supabase
-            .from("pages")
-            .update(articlePatch)
-            .eq("article_id", linkedArticle.id);
+          const syncLinkedArticlePagesError = await syncArticleFieldsToPagesInDatabase({
+            ...linkedArticle,
+            ...articlePatch,
+          });
+          if (syncLinkedArticlePagesError) {
+            setNotice(syncLinkedArticlePagesError);
+            setIsSaving(false);
+            return;
+          }
         }
       }
     }
@@ -1545,18 +1629,15 @@ function TimoniereApp() {
     }
 
     if (resolvedArticle) {
-      await supabase
-        .from("pages")
-        .update({
-          title: resolvedArticle.title,
-          assignee: resolvedArticle.assignee,
-          character_count: resolvedArticle.character_count,
-          status_id: resolvedArticle.status_id,
-        })
-        .eq("article_id", resolvedArticle.id);
+      const syncResolvedArticlePagesError = await syncArticleFieldsToPagesInDatabase(resolvedArticle);
+      if (syncResolvedArticlePagesError) {
+        setNotice(syncResolvedArticlePagesError);
+        setIsSaving(false);
+        return;
+      }
     }
 
-    await Promise.all([loadPages(selectedIssueId), loadArticles(selectedIssueId)]);
+    await reloadIssueContent();
     setNotice(`${pageIds.length} pagine aggiornate.`);
     setBulkStatusId(KEEP_BULK_VALUE);
     setBulkTitle("");
@@ -1727,17 +1808,9 @@ function TimoniereApp() {
 
   const deleteArticles = useCallback(
     async (articleIds: string[]) => {
-      if (!supabase || articleIds.length === 0) return;
+      if (!supabase || !selectedIssueId || articleIds.length === 0) return;
 
       setIsSaving(true);
-
-      const { error: detachError } = await supabase.from("pages").update({ article_id: null }).in("article_id", articleIds);
-
-      if (detachError) {
-        setNotice(detachError.message);
-        setIsSaving(false);
-        return;
-      }
 
       const { error } = await supabase.from("articles").delete().in("id", articleIds);
 
@@ -1747,12 +1820,7 @@ function TimoniereApp() {
         return;
       }
 
-      setPages((current) =>
-        sortPages(
-          current.map((page) => (page.article_id && articleIds.includes(page.article_id) ? { ...page, article_id: null } : page)),
-        ),
-      );
-      setArticles((current) => sortArticles(current.filter((article) => !articleIds.includes(article.id))));
+      await reloadIssueContent();
       setSelectedArticleId(null);
       setSelectedArticleIds([]);
       setSelectionAnchorArticleId(null);
@@ -1764,7 +1832,7 @@ function TimoniereApp() {
       setNotice(articleIds.length === 1 ? "Articolo eliminato." : `${articleIds.length} articoli eliminati.`);
       setIsSaving(false);
     },
-    [inlineArticleEditor],
+    [inlineArticleEditor, reloadIssueContent, selectedIssueId],
   );
 
   async function deleteSelectedArticles() {
@@ -1844,7 +1912,7 @@ function TimoniereApp() {
       }
     }
 
-    await Promise.all([loadArticles(selectedIssueId), loadPages(selectedIssueId)]);
+    await reloadIssueContent();
     setBulkArticleStatusId(KEEP_BULK_VALUE);
     setBulkArticleAssignee("");
     setBulkArticleCharacterCount("");
@@ -1870,21 +1938,17 @@ function TimoniereApp() {
     }
 
     const updatedArticle = data as Article;
-    await supabase
-      .from("pages")
-      .update({ status_id: updatedArticle.status_id })
-      .eq("article_id", updatedArticle.id);
+    const syncMovedArticlePagesError = await syncArticleFieldsToPagesInDatabase(updatedArticle);
+    if (syncMovedArticlePagesError) {
+      setNotice(syncMovedArticlePagesError);
+      setIsSaving(false);
+      return;
+    }
 
     setArticles((current) =>
       sortArticles(current.map((currentArticle) => (currentArticle.id === updatedArticle.id ? updatedArticle : currentArticle))),
     );
-    setPages((current) =>
-      sortPages(
-        current.map((page) =>
-          page.article_id === updatedArticle.id ? { ...page, status_id: updatedArticle.status_id } : page,
-        ),
-      ),
-    );
+    applyArticleFieldsToPagesState(updatedArticle);
     setNotice("Status articolo aggiornato.");
     setIsSaving(false);
   }
@@ -2134,6 +2198,7 @@ function TimoniereApp() {
 
   function openInlineEditor(page: MagazinePage, anchor: HTMLElement, origin?: InlineEditorOrigin) {
     setSelectedPageId(page.id);
+    setPageDraft(draftFromPage(page, getPageArticle(page)));
     setInlineArticleEditor(null);
     setInlineArticlePlacement(null);
     setInlineEditorPageId(page.id);
@@ -2810,19 +2875,20 @@ function TimoniereApp() {
         </div>
       ) : null}
 
-      {inlineEditorPageId && selectedPage && inlineEditorPlacement ? (
+      {inlineEditingPage && inlineEditorPlacement ? (
         <InlinePageEditor
           articleTitles={articleTitles}
           draft={pageDraft}
-          isContentPage={selectedPage.kind === "content"}
+          hasSharedArticleFields={inlineEditingPageHasSharedArticleFields}
+          isContentPage={inlineEditingPage.kind === "content"}
           isSaving={isSaving}
           label={
-            selectedPage.kind === "content"
-              ? `Pagina ${pageLabel(selectedPage, contentPages)}`
-              : pageLabel(selectedPage, contentPages)
+            inlineEditingPage.kind === "content"
+              ? `Pagina ${pageLabel(inlineEditingPage, contentPages)}`
+              : pageLabel(inlineEditingPage, contentPages)
           }
-          onClose={() => void saveInlineEditorAndClose()}
-          onSave={savePage}
+          onClose={closeInlinePageEditor}
+          onSave={saveInlinePage}
           placement={inlineEditorPlacement}
           editorRef={inlineEditorRef}
           setDraft={setPageDraft}
@@ -3221,16 +3287,21 @@ function TimoniereApp() {
                 Nome articolo
                 <ArticleAutocompleteInput
                   articleTitles={articleTitles}
+                  disabled={selectedPageHasSharedArticleFields}
                   onChange={(value) => setPageDraft((draft) => ({ ...draft, title: value }))}
                   value={pageDraft.title}
                   placeholder="Breve storia del golf"
                 />
               </label>
+              {selectedPageHasSharedArticleFields ? (
+                <p className="page-kind">Articolo condiviso su piu pagine. Modificalo dalla Kanban.</p>
+              ) : null}
               {selectedPageIsContent ? (
                 <>
                   <label>
                     Assegnato a
                     <input
+                      disabled={selectedPageHasSharedArticleFields}
                       value={pageDraft.assignee}
                       onChange={(event) => setPageDraft((draft) => ({ ...draft, assignee: event.target.value }))}
                       placeholder="Nome redattore"
@@ -3239,6 +3310,7 @@ function TimoniereApp() {
                   <label>
                     Battute
                     <input
+                      disabled={selectedPageHasSharedArticleFields}
                       min={0}
                       type="number"
                       value={pageDraft.character_count ?? ""}
@@ -3256,6 +3328,7 @@ function TimoniereApp() {
               <label>
                 Status
                 <StatusSelect
+                  disabled={selectedPageHasSharedArticleFields}
                   statuses={statuses}
                   value={pageDraft.status_id ?? ""}
                   onChange={(statusId) => setPageDraft((draft) => ({ ...draft, status_id: statusId }))}
@@ -3482,6 +3555,7 @@ type InlinePageEditorProps = {
   articleTitles: string[];
   draft: PageDraft;
   editorRef: RefObject<HTMLFormElement | null>;
+  hasSharedArticleFields?: boolean;
   isContentPage: boolean;
   isSaving: boolean;
   label: string;
@@ -3511,6 +3585,7 @@ function InlinePageEditor({
   articleTitles,
   draft,
   editorRef,
+  hasSharedArticleFields = false,
   isContentPage,
   isSaving,
   label,
@@ -3555,17 +3630,22 @@ function InlinePageEditor({
         Nome articolo
         <ArticleAutocompleteInput
           articleTitles={articleTitles}
+          disabled={hasSharedArticleFields}
           inputRef={titleInputRef}
           onChange={(value) => setDraft((currentDraft) => ({ ...currentDraft, title: value }))}
           value={draft.title}
           placeholder="Breve storia del golf"
         />
       </label>
+      {hasSharedArticleFields ? (
+        <p className="page-kind">Articolo condiviso su piu pagine. Modificalo dalla Kanban.</p>
+      ) : null}
       {isContentPage ? (
         <>
           <label>
             Assegnato a
             <input
+              disabled={hasSharedArticleFields}
               value={draft.assignee}
               onChange={(event) => setDraft((currentDraft) => ({ ...currentDraft, assignee: event.target.value }))}
               placeholder="Nome redattore"
@@ -3574,6 +3654,7 @@ function InlinePageEditor({
           <label>
             Battute
             <input
+              disabled={hasSharedArticleFields}
               min={0}
               type="number"
               value={draft.character_count ?? ""}
@@ -3591,6 +3672,7 @@ function InlinePageEditor({
       <label>
         Status
         <StatusSelect
+          disabled={hasSharedArticleFields}
           statuses={statuses}
           value={draft.status_id ?? ""}
           onChange={(statusId) => setDraft((currentDraft) => ({ ...currentDraft, status_id: statusId }))}
@@ -3833,6 +3915,7 @@ function LinkChainIcon() {
 type ArticleAutocompleteInputProps = {
   articleTitles: string[];
   autoFocus?: boolean;
+  disabled?: boolean;
   inputRef?: RefObject<HTMLInputElement | null>;
   onChange: (value: string) => void;
   placeholder?: string;
@@ -3842,6 +3925,7 @@ type ArticleAutocompleteInputProps = {
 function ArticleAutocompleteInput({
   articleTitles,
   autoFocus = false,
+  disabled = false,
   inputRef,
   onChange,
   placeholder,
@@ -3912,6 +3996,7 @@ function ArticleAutocompleteInput({
         data-1p-ignore="true"
         data-form-type="other"
         data-lpignore="true"
+        disabled={disabled}
         onChange={(event) => {
           const nextValue = event.target.value;
           onChange(nextValue);
@@ -3950,13 +4035,14 @@ function ArticleAutocompleteInput({
 }
 
 type StatusSelectProps = {
+  disabled?: boolean;
   includeKeepOption?: boolean;
   onChange: (statusId: string | null) => void;
   statuses: EditorialStatus[];
   value: string;
 };
 
-function StatusSelect({ includeKeepOption = false, onChange, statuses, value }: StatusSelectProps) {
+function StatusSelect({ disabled = false, includeKeepOption = false, onChange, statuses, value }: StatusSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const selectRef = useRef<HTMLDivElement | null>(null);
   const selectedStatus = statuses.find((status) => status.id === value) ?? null;
@@ -3991,6 +4077,7 @@ function StatusSelect({ includeKeepOption = false, onChange, statuses, value }: 
       <button
         aria-expanded={isOpen}
         className="status-select-trigger"
+        disabled={disabled}
         onClick={() => setIsOpen((current) => !current)}
         type="button"
       >
