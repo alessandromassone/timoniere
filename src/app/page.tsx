@@ -419,15 +419,6 @@ function TimoniereApp() {
       ),
     [articles, kanbanColumns],
   );
-  const selectedPageHasSharedArticleFields =
-    selectedPage?.kind === "content" &&
-    !!selectedPage.article_id &&
-    (articlePages[selectedPage.article_id]?.length ?? 0) > 1;
-  const inlineEditingPageHasSharedArticleFields =
-    inlineEditingPage?.kind === "content" &&
-    !!inlineEditingPage.article_id &&
-    (articlePages[inlineEditingPage.article_id]?.length ?? 0) > 1;
-
   const closeIssueInfoModal = useCallback(() => {
     setIsIssueInfoModalOpen(false);
     setIssueDraftTitle(selectedIssue?.title ?? "");
@@ -515,21 +506,7 @@ function TimoniereApp() {
 
       const trimmedTitle = draft.title.trim();
       const currentArticle = targetPage.article_id ? articles.find((article) => article.id === targetPage.article_id) ?? null : null;
-      const linkedPageCount = currentArticle ? pages.filter((page) => page.article_id === currentArticle.id).length : 0;
       let resolvedArticle: Article | null = null;
-
-      if (
-        currentArticle &&
-        linkedPageCount > 1 &&
-        (trimmedTitle !== currentArticle.title ||
-          draft.assignee.trim() !== currentArticle.assignee ||
-          draft.character_count !== currentArticle.character_count ||
-          (draft.status_id || null) !== currentArticle.status_id)
-      ) {
-        setNotice("Questo articolo e collegato a piu pagine. Modificalo dalla Kanban per evitare aggiornamenti involontari.");
-        setIsSaving(false);
-        return;
-      }
 
       if (trimmedTitle) {
         const matchKey = articleMatchKey(trimmedTitle);
@@ -542,12 +519,6 @@ function TimoniereApp() {
           status_id: draft.status_id || null,
           title: trimmedTitle,
         };
-
-        if (matchedArticle && matchedArticle.id !== currentArticle?.id) {
-          setNotice("Esiste gia un altro articolo con questo titolo. Aprilo dalla Kanban per modificarlo.");
-          setIsSaving(false);
-          return;
-        }
 
         if (currentArticle && (!matchedArticle || matchedArticle.id === currentArticle.id)) {
           const { data, error } = await supabase
@@ -640,7 +611,7 @@ function TimoniereApp() {
 
       setIsSaving(false);
     },
-    [applyArticleFieldsToPagesState, articles, pages, syncArticleFieldsToPagesInDatabase],
+    [applyArticleFieldsToPagesState, articles, syncArticleFieldsToPagesInDatabase],
   );
 
   const closeInlinePageEditor = useCallback(() => {
@@ -1513,19 +1484,13 @@ function TimoniereApp() {
       const matchKey = articleMatchKey(trimmedTitle);
       const matchedArticle =
         articles.find((article) => article.issue_id === selectedIssueId && article.match_key === matchKey) ?? null;
-      const hasPagesLinkedToDifferentArticle = selectedContentPages.some(
-        (page) => page.article_id && page.article_id !== matchedArticle?.id,
-      );
-      const hasUnlinkedPages = selectedContentPages.some((page) => !page.article_id);
 
       if (matchedArticle) {
-        if (hasPagesLinkedToDifferentArticle || hasUnlinkedPages) {
-          setNotice("Esiste gia un altro articolo con questo titolo. Aprilo dalla Kanban per modificarlo.");
-          setIsSaving(false);
-          return;
-        }
+        const canUpdateMatchedArticle = selectedContentPages.every(
+          (page) => !page.article_id || page.article_id === matchedArticle.id,
+        );
 
-        if (Object.keys(articlePatch).length > 0) {
+        if (Object.keys(articlePatch).length > 0 && canUpdateMatchedArticle) {
           const { data, error } = await supabase
             .from("articles")
             .update({ ...articlePatch, title: trimmedTitle, match_key: matchKey })
@@ -1582,17 +1547,6 @@ function TimoniereApp() {
             .map((article) => [article.id, article]),
         ).values(),
       );
-
-      const selectedPageIdsSet = new Set(pageIds);
-      const hasPartiallySelectedArticle = linkedArticles.some((article) =>
-        pages.some((page) => page.article_id === article.id && !selectedPageIdsSet.has(page.id)),
-      );
-
-      if (hasPartiallySelectedArticle && (trimmedTitle || Object.keys(articlePatch).length > 0)) {
-        setNotice("La selezione include articoli collegati anche ad altre pagine. Modificali dalla Kanban.");
-        setIsSaving(false);
-        return;
-      }
 
       if (linkedArticles.length > 0 && Object.keys(articlePatch).length > 0) {
         for (const linkedArticle of linkedArticles) {
@@ -2881,7 +2835,6 @@ function TimoniereApp() {
         <InlinePageEditor
           articleTitles={articleTitles}
           draft={pageDraft}
-          hasSharedArticleFields={inlineEditingPageHasSharedArticleFields}
           isContentPage={inlineEditingPage.kind === "content"}
           isSaving={isSaving}
           label={
@@ -3289,21 +3242,16 @@ function TimoniereApp() {
                 Nome articolo
                 <ArticleAutocompleteInput
                   articleTitles={articleTitles}
-                  disabled={selectedPageHasSharedArticleFields}
                   onChange={(value) => setPageDraft((draft) => ({ ...draft, title: value }))}
                   value={pageDraft.title}
                   placeholder="Breve storia del golf"
                 />
               </label>
-              {selectedPageHasSharedArticleFields ? (
-                <p className="page-kind">Articolo condiviso su piu pagine. Modificalo dalla Kanban.</p>
-              ) : null}
               {selectedPageIsContent ? (
                 <>
                   <label>
                     Assegnato a
                     <input
-                      disabled={selectedPageHasSharedArticleFields}
                       value={pageDraft.assignee}
                       onChange={(event) => setPageDraft((draft) => ({ ...draft, assignee: event.target.value }))}
                       placeholder="Nome redattore"
@@ -3312,7 +3260,6 @@ function TimoniereApp() {
                   <label>
                     Battute
                     <input
-                      disabled={selectedPageHasSharedArticleFields}
                       min={0}
                       type="number"
                       value={pageDraft.character_count ?? ""}
@@ -3330,7 +3277,6 @@ function TimoniereApp() {
               <label>
                 Status
                 <StatusSelect
-                  disabled={selectedPageHasSharedArticleFields}
                   statuses={statuses}
                   value={pageDraft.status_id ?? ""}
                   onChange={(statusId) => setPageDraft((draft) => ({ ...draft, status_id: statusId }))}
@@ -3557,7 +3503,6 @@ type InlinePageEditorProps = {
   articleTitles: string[];
   draft: PageDraft;
   editorRef: RefObject<HTMLFormElement | null>;
-  hasSharedArticleFields?: boolean;
   isContentPage: boolean;
   isSaving: boolean;
   label: string;
@@ -3587,7 +3532,6 @@ function InlinePageEditor({
   articleTitles,
   draft,
   editorRef,
-  hasSharedArticleFields = false,
   isContentPage,
   isSaving,
   label,
@@ -3632,22 +3576,17 @@ function InlinePageEditor({
         Nome articolo
         <ArticleAutocompleteInput
           articleTitles={articleTitles}
-          disabled={hasSharedArticleFields}
           inputRef={titleInputRef}
           onChange={(value) => setDraft((currentDraft) => ({ ...currentDraft, title: value }))}
           value={draft.title}
           placeholder="Breve storia del golf"
         />
       </label>
-      {hasSharedArticleFields ? (
-        <p className="page-kind">Articolo condiviso su piu pagine. Modificalo dalla Kanban.</p>
-      ) : null}
       {isContentPage ? (
         <>
           <label>
             Assegnato a
             <input
-              disabled={hasSharedArticleFields}
               value={draft.assignee}
               onChange={(event) => setDraft((currentDraft) => ({ ...currentDraft, assignee: event.target.value }))}
               placeholder="Nome redattore"
@@ -3656,7 +3595,6 @@ function InlinePageEditor({
           <label>
             Battute
             <input
-              disabled={hasSharedArticleFields}
               min={0}
               type="number"
               value={draft.character_count ?? ""}
@@ -3674,7 +3612,6 @@ function InlinePageEditor({
       <label>
         Status
         <StatusSelect
-          disabled={hasSharedArticleFields}
           statuses={statuses}
           value={draft.status_id ?? ""}
           onChange={(statusId) => setDraft((currentDraft) => ({ ...currentDraft, status_id: statusId }))}
@@ -3917,7 +3854,6 @@ function LinkChainIcon() {
 type ArticleAutocompleteInputProps = {
   articleTitles: string[];
   autoFocus?: boolean;
-  disabled?: boolean;
   inputRef?: RefObject<HTMLInputElement | null>;
   onChange: (value: string) => void;
   placeholder?: string;
@@ -3927,7 +3863,6 @@ type ArticleAutocompleteInputProps = {
 function ArticleAutocompleteInput({
   articleTitles,
   autoFocus = false,
-  disabled = false,
   inputRef,
   onChange,
   placeholder,
@@ -3998,7 +3933,6 @@ function ArticleAutocompleteInput({
         data-1p-ignore="true"
         data-form-type="other"
         data-lpignore="true"
-        disabled={disabled}
         onChange={(event) => {
           const nextValue = event.target.value;
           onChange(nextValue);
@@ -4037,14 +3971,13 @@ function ArticleAutocompleteInput({
 }
 
 type StatusSelectProps = {
-  disabled?: boolean;
   includeKeepOption?: boolean;
   onChange: (statusId: string | null) => void;
   statuses: EditorialStatus[];
   value: string;
 };
 
-function StatusSelect({ disabled = false, includeKeepOption = false, onChange, statuses, value }: StatusSelectProps) {
+function StatusSelect({ includeKeepOption = false, onChange, statuses, value }: StatusSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const selectRef = useRef<HTMLDivElement | null>(null);
   const selectedStatus = statuses.find((status) => status.id === value) ?? null;
@@ -4079,7 +4012,6 @@ function StatusSelect({ disabled = false, includeKeepOption = false, onChange, s
       <button
         aria-expanded={isOpen}
         className="status-select-trigger"
-        disabled={disabled}
         onClick={() => setIsOpen((current) => !current)}
         type="button"
       >
