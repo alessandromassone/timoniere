@@ -18,6 +18,14 @@ La persistenza dei dati e la sincronizzazione multiutente sono gestite da Supaba
 - Dati per pagina: articolo, assegnatario, battute, status, warning e nota warning.
 - Status editoriali modificabili dall'interfaccia.
 - Link condivisibile al numero aperto.
+- Notifiche Discord per i cambi di status delle pagine (attivazione opzionale).
+
+## Notifiche Discord
+
+L'aggiornamento usa una coda privata in Supabase, un trigger sulle pagine e un
+worker con reinvio degli errori temporanei. Il webhook rimane in Supabase Vault.
+Per installare la migration e collegare il canale segui [la guida passo passo](docs/discord.md).
+Il push su GitHub non applica automaticamente la migration Supabase.
 
 ## Setup locale
 
